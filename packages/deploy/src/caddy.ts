@@ -39,6 +39,7 @@ import { RESERVED_NAMES } from "./compose-model.js";
 import { LIST_CERTIFICATES_SCRIPT, parseIssuedCertificates } from "./caddy-storage.js";
 import type { CertificateStatus } from "./tls-status.js";
 import { run } from "./exec.js";
+import { PANEL_PAGE_HEADER, type PanelPageKind } from "./panel-page.js";
 
 /** Diretório da configuração dentro do container do Caddy (existe na imagem). */
 export const CADDY_CONFIG_DIR = "/etc/caddy";
@@ -106,6 +107,13 @@ export interface CaddyTarget {
    */
   updating?: boolean;
   /**
+   * true = dentro do deploy, os containers do app estão sendo parados ou
+   * recriados agora (da troca até o fim do job): a espera pelos cabeçalhos da
+   * resposta do app fica curta (UPDATING_HEADER_TIMEOUT_SECONDS). Só vale com
+   * `updating`; no build, com o app antigo atendendo, não há limite.
+   */
+  replacing?: boolean;
+  /**
    * true = o projeto foi parado de propósito no painel: o proxy NÃO espera o app
    * voltar (sem `lb_try_duration`) e mostra a página na hora.
    */
@@ -161,6 +169,8 @@ export interface CaddyDynamicRoute {
   published?: boolean;
   /** Deploy em andamento (ver CaddyTarget.updating). */
   updating?: boolean;
+  /** Containers do app sendo trocados no deploy (ver CaddyTarget.replacing). */
+  replacing?: boolean;
   /** Projeto parado de propósito (ver CaddyTarget.stopped). */
   stopped?: boolean;
   suffixes: string[];
@@ -832,15 +842,19 @@ export const STREAM_CLOSE_DELAY = "5m";
 /** Segundos do Retry-After da página "Atualizando". */
 export const UPDATING_RETRY_AFTER_SECONDS = 5;
 /**
- * Durante o deploy, quanto o proxy espera os cabeçalhos da resposta do app antes de mostrar a página
- * "Atualizando" (transport http `response_header_timeout`; sem ele o Caddy espera sem limite). Cobre o
- * app que aceita a conexão e não responde enquanto é recriado: o nginx do projeto esperando um PHP-FPM
- * que está saindo ou subindo, ou um processo encerrando com a fila de conexões ainda aberta. Fora do
- * deploy não há limite (vale o padrão do Caddy): uma requisição lenta do app nunca é cortada por isso.
+ * Na fase de troca do deploy (CaddyTarget.replacing), quanto o proxy espera os cabeçalhos da resposta do
+ * app antes de mostrar a página "Atualizando" (transport http `response_header_timeout`; sem ele o Caddy
+ * espera sem limite). Cobre o app que aceita a conexão e não responde enquanto é recriado: o nginx do
+ * projeto esperando um PHP-FPM que está saindo ou subindo, ou um processo encerrando com a fila de conexões
+ * ainda aberta. Fora da troca (inclusive durante o build, com o app antigo atendendo) não há limite: uma
+ * exportação, um PDF ou um upload demorado nunca são cortados por isso.
  */
 export const UPDATING_HEADER_TIMEOUT_SECONDS = 5;
 /** Respostas do app que, durante o deploy, viram a página "Atualizando" (handle_response no reverse_proxy). */
 export const UPDATING_UPSTREAM_STATUSES = [502, 503, 504] as const;
+
+/** Cabeçalho das páginas de erro de projeto (ver panel-page.ts): o health check sabe que quem respondeu foi o painel. */
+export { PANEL_PAGE_HEADER };
 
 /**
  * Projeto ainda não publicado (domínio já conectado). "Manutenção", e não
@@ -941,18 +955,22 @@ function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): v
   const wait = target.updating === true && target.published !== false ? UPDATING_WAIT_SECONDS : UPSTREAM_WAIT_SECONDS;
   if (waits) proxy.push(`\t\tlb_try_duration ${wait}s`, `\t\tlb_try_interval ${UPSTREAM_WAIT_INTERVAL_MS}ms`);
   // Durante o deploy (só ele: é quando o painel sabe o que está acontecendo), um app que responde 502/503/504
-  // ou que não responde em poucos segundos também cai na página do painel, e não só a falha de conexão. Caso
-  // real: compose com nginx próprio na frente do PHP. Ao recriar o PHP, o nginx continua de pé, primeiro segura
-  // a conexão sem responder e depois devolve o 502 cru dele; o handle_errors abaixo só via erros do próprio
-  // Caddy. O `error 503` dentro do handle_response vira erro do handler e cai no MESMO handle_errors (mesma
-  // página, mesmo status e cabeçalhos). Fora do deploy as respostas do app passam como estão.
-  if (!isPanel && target.updating === true && target.stopped !== true) {
+  // também cai na página do painel, e não só a falha de conexão. Caso real: compose com nginx próprio na frente
+  // do PHP. Ao recriar o PHP, o nginx continua de pé, primeiro segura a conexão sem responder e depois devolve o
+  // 502 cru dele; o handle_errors abaixo só via erros do próprio Caddy. O `error 503` dentro do handle_response
+  // vira erro do handler e cai no MESMO handle_errors (mesma página, mesmo status e cabeçalhos); o `vars` guarda
+  // o status do app para o cabeçalho do painel. Fora do deploy as respostas do app passam como estão.
+  const deploying = !isPanel && target.updating === true && target.stopped !== true;
+  // A espera curta pelos cabeçalhos só na fase de troca (os containers do app sendo parados ou recriados): no
+  // build o app antigo atende normalmente, e uma requisição demorada dele não pode ser cortada.
+  if (deploying && target.replacing === true) {
+    proxy.push("\t\ttransport http {", `\t\t\tresponse_header_timeout ${UPDATING_HEADER_TIMEOUT_SECONDS}s`, "\t\t}");
+  }
+  if (deploying) {
     proxy.push(
-      "\t\ttransport http {",
-      `\t\t\tresponse_header_timeout ${UPDATING_HEADER_TIMEOUT_SECONDS}s`,
-      "\t\t}",
       `\t\t@app_indisponivel status ${UPDATING_UPSTREAM_STATUSES.join(" ")}`,
       "\t\thandle_response @app_indisponivel {",
+      "\t\t\tvars tws_status_app {rp.status_code}",
       "\t\t\terror 503",
       "\t\t}",
     );
@@ -964,9 +982,11 @@ function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): v
     // "nunca publicado" tem prioridade: o domínio ainda não tem site para "voltar".
     const updating = target.updating === true && target.published !== false;
     const page = target.published === false ? PROJECT_PENDING_PAGE : updating ? PROJECT_UPDATING_PAGE : PROJECT_DOWN_PAGE;
+    const kind: PanelPageKind = target.published === false ? "manutencao" : updating ? "atualizando" : "indisponivel";
     lines.push(
       "\thandle_errors 502 503 504 {",
       '\t\theader Content-Type "text/html; charset=utf-8"',
+      `\t\theader ${PANEL_PAGE_HEADER} "pagina=${kind}; app={vars.tws_status_app}; proxy={err.status_code}"`,
       ...(updating ? [`\t\theader Retry-After "${UPDATING_RETRY_AFTER_SECONDS}"`, '\t\theader Cache-Control "no-store"'] : []),
       `\t\trespond \`${page}\` 503`,
       "\t}",
@@ -1012,7 +1032,7 @@ function pushDynamicBlocks(lines: string[], routes: CaddyDynamicRoute[], taken: 
     const addresses = [...suffixes.map((s) => `*.${s}`), ...hosts];
     if (addresses.length === 0) return;
     lines.push(`${addresses.join(",\n")} {`, "\ttls {", "\t\ton_demand", "\t}");
-    pushSiteBody(lines, { domain: "", upstream: route.upstream, websocket: route.websocket, published: route.published ?? true, updating: route.updating === true, stopped: route.stopped === true }, false);
+    pushSiteBody(lines, { domain: "", upstream: route.upstream, websocket: route.websocket, published: route.published ?? true, updating: route.updating === true, replacing: route.replacing === true, stopped: route.stopped === true }, false);
     lines.push("}", "");
   });
 }
