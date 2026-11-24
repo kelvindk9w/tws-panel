@@ -7,8 +7,8 @@
 //   - âncora (#...)    → existe um título ou <a id> correspondente no destino;
 //   - URL do próprio repositório (github.com/<repo>/blob|tree/main/…) → o
 //     arquivo/pasta existe localmente;
-//   - `link: /en/…` do frontmatter das páginas iniciais e caminhos absolutos do site (`](/en/…)`,
-//     com o base da config) → a página existe;
+//   - `link: /tws-panel/en/…` do frontmatter das páginas iniciais e caminhos absolutos do site
+//     (`](/tws-panel/en/…)`; o prefixo é o base da config) → a página existe;
 //   - URL absoluta do próprio site (READMEs, .github/…; o endereço vem de site/astro.config.mjs)
 //     → existe a rota (e a âncora, se houver) no build em site/dist. Sem build, essa parte é
 //     pulada com um aviso; com --require-dist, a falta do build é erro.
@@ -20,7 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { ROOT, readSiteConfig } from './site-config.mjs';
+import { ROOT, readSiteConfig, sitePageExists as pageExists } from './site-config.mjs';
 
 const SITE = readSiteConfig();
 const DIST = path.join(ROOT, 'site', 'dist');
@@ -71,16 +71,9 @@ function anchorsOf(rel) {
   return set;
 }
 
-// Caminho absoluto do site (`/en/guides/x/#ancora`, já com o base) → existe a página-fonte.
-// Com o site na raiz do domínio, todo caminho começado por "/" é do site; sem esta conferência,
-// um caminho absoluto errado passaria em silêncio.
-function sitePageExists(urlPath) {
-  const slug = urlPath.slice(SITE_BASE.length).split('#')[0].split('?')[0].replace(/\/$/, '');
-  const candidates = slug
-    ? [`site/src/content/docs/${slug}.md`, `site/src/content/docs/${slug}.mdx`, `site/src/content/docs/${slug}/index.md`, `site/src/content/docs/${slug}/index.mdx`]
-    : ['site/src/pages/index.astro'];
-  return candidates.some((c) => existsSync(path.join(ROOT, c)));
-}
+// Caminho absoluto do site (`/tws-panel/en/guides/x/#ancora`, já com o base) → existe a página-fonte.
+// Sem esta conferência, um caminho absoluto errado passaria em silêncio (a regra fica em site-config.mjs).
+const sitePageExists = (urlPath) => pageExists(urlPath, { basePath: SITE.basePath });
 
 const problems = [];
 const report = (file, line, msg) => problems.push(`${file}:${line}: ${msg}`);

@@ -2,15 +2,16 @@
 // É a ÚNICA fonte do endereço: os scripts de documentação derivam tudo daqui.
 // Sem dependências. Usado por check-site-url.mjs e check-doc-links.mjs.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG = 'site/astro.config.mjs';
 
-export function readSiteConfig() {
-  const text = readFileSync(path.join(ROOT, CONFIG), 'utf8');
+// `root` existe para os testes lerem uma config de uma pasta temporária; os scripts usam o padrão.
+export function readSiteConfig(root = ROOT) {
+  const text = readFileSync(path.join(root, CONFIG), 'utf8');
   const site = /^\s*site:\s*'([^']+)'/m.exec(text)?.[1];
   const base = /^const base = '([^']*)'/m.exec(text)?.[1];
   if (!site || base === undefined) {
@@ -33,4 +34,20 @@ export function readSiteConfig() {
 // `#site-url-ignore`) nem como parte de outra palavra, e não desliga a checagem do próprio site.
 export function hasIgnoreComment(text) {
   return /<!--\s*site-url-ignore\s*-->|(?:^|\s)(?:\/\/|#)\s*site-url-ignore(?=\s|$)/.test(text);
+}
+
+// Caminho absoluto do site (`/tws-panel/en/guides/x/#ancora`, já com o base) → existe a página-fonte
+// em site/src/content/docs (`.md`/`.mdx`, solta ou como `index` da pasta). Só o base sozinho é a
+// página inicial (site/src/pages/index.astro). Fora do base, ou com `..` no caminho, é falso.
+// Usado por check-doc-links.mjs nos links `link:` do frontmatter e nos `](/…)` do Markdown.
+export function sitePageExists(urlPath, { basePath, root = ROOT }) {
+  const prefix = `${basePath}/`;
+  const clean = urlPath.split('#')[0].split('?')[0];
+  if (clean !== basePath && !clean.startsWith(prefix)) return false;
+  const slug = clean.slice(prefix.length).replace(/\/+$/, '');
+  if (slug.split('/').includes('..')) return false;
+  const candidates = slug
+    ? [`${slug}.md`, `${slug}.mdx`, `${slug}/index.md`, `${slug}/index.mdx`].map((c) => `site/src/content/docs/${c}`)
+    : ['site/src/pages/index.astro'];
+  return candidates.some((c) => existsSync(path.join(root, c)));
 }
