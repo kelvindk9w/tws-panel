@@ -5,12 +5,14 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 import remarkDocLinks from './plugins/remark-doc-links.mjs';
 import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 
-// GitHub Pages site on the TWS subdomain, served at the root: https://docs.tws.tec.br/
-// The custom domain itself is set in Settings → Pages (the Actions workflow ignores CNAME files);
-// site/public/CNAME holds the same host and `pnpm docs:site-url` checks that they match.
-// The old https://kelvindk9w.github.io/tws-panel/… addresses are redirected by GitHub Pages
-// to the same path on this domain once the custom domain is configured.
-const base = '/';
+// GitHub Pages project site, in its own folder of the account domain: https://docs.tws.tec.br/tws-panel/
+// This repository has NO custom domain (none in Settings → Pages, no site/public/CNAME): the domain is
+// set on the account's user site (<user>.github.io), and every project site without a custom domain
+// inherits it as https://docs.tws.tec.br/<repository>/. `pnpm docs:site-url` checks this site + base
+// and that site/public/CNAME does not exist (a custom domain here would override the inherited one).
+// Old https://kelvindk9w.github.io/tws-panel/… links: GitHub Pages usually redirects them to the same
+// path on the inherited domain; that is checked after the switch, not guaranteed here.
+const base = '/tws-panel/';
 const repo = 'https://github.com/kelvindk9w/tws-panel';
 
 // The first group is the step-by-step guide, in two chained parts (Part 1 Install, Part 2 Configure).

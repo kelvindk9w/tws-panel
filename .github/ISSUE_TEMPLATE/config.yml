@@ -7,8 +7,8 @@ contact_links:
     url: https://github.com/kelvindk9w/tws-panel/security/advisories/new
     about: Report vulnerabilities privately. Do not open a public issue.
   - name: Documentation
-    url: https://docs.tws.tec.br/
+    url: https://docs.tws.tec.br/tws-panel/
     about: Installation, operation and troubleshooting guides.
   - name: Help and feedback
-    url: https://docs.tws.tec.br/en/guides/help/
+    url: https://docs.tws.tec.br/tws-panel/en/guides/help/
     about: Where to ask, report, suggest, and what to include in a bug report.

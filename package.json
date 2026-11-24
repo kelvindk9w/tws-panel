@@ -4,7 +4,7 @@
   "private": true,
   "description": "TWS Panel — painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal.",
   "author": "Kelvin — CEO & Founder @ TWS",
-  "homepage": "https://docs.tws.tec.br/",
+  "homepage": "https://docs.tws.tec.br/tws-panel/",
   "repository": {
     "type": "git",
     "url": "https://github.com/kelvindk9w/tws-panel.git"

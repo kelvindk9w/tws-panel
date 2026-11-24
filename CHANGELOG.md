@@ -563,12 +563,13 @@ nem tag correspondentes neste repositório.
 ### Alterado
 
 - **Documentação em domínio próprio:** o site de documentação passa a ser servido em
-  `https://docs.tws.tec.br/`, na raiz (sem o `/tws-panel/` no caminho). Os links do painel (Ajuda,
-  guias, restauração, e-mail), dos READMEs e dos modelos de issue apontam para o endereço novo. Os
-  links antigos em `kelvindk9w.github.io/tws-panel/…` continuam funcionando: o GitHub Pages os
-  redireciona para o mesmo caminho no domínio novo. As checagens de links passam a conferir também
-  o arquivo `site/public/CNAME` e os caminhos absolutos das páginas do site, e o verificador de
-  hosts reais aceita esse único subdomínio.
+  `https://docs.tws.tec.br/tws-panel/` (o mesmo caminho `/tws-panel/` de antes, no domínio da TWS).
+  Os links do painel (Ajuda, guias, restauração, e-mail), dos READMEs e dos modelos de issue apontam
+  para o endereço novo. Os links antigos em `kelvindk9w.github.io/tws-panel/…`: o GitHub Pages
+  costuma redirecioná-los para o mesmo caminho no domínio novo, e isso é conferido depois da troca.
+  As checagens de links passam a exigir esse endereço e a ausência de `site/public/CNAME`, e a
+  conferir os caminhos absolutos das páginas do site; o verificador de hosts reais aceita esse único
+  subdomínio.
 - Só para quem contribui: o Dependabot deixa de abrir PR de salto de versão maior (major); esse tipo
   de atualização passa a ser sempre uma tarefa própria. Os PRs de versão menor e de correção
   continuam, mirando a `dev`.

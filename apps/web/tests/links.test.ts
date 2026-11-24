@@ -17,6 +17,7 @@ import {
   SITE_URL,
   siteLanguage,
 } from "../src/lib/links";
+import * as links from "../src/lib/links";
 
 /** Parâmetros que o link do bug pode, no máximo, carregar. */
 const ALLOWED_PARAMS = ["template", "version", "locale"];
@@ -55,8 +56,39 @@ describe("endereços por idioma", () => {
   it("Discussions e formulário de funcionalidade apontam para o repositório", () => {
     expect(discussionsUrl()).toBe(`${REPO_URL}/discussions`);
     expect(featureRequestUrl()).toBe(`${REPO_URL}/issues/new?template=feature_request.yml`);
-    expect(SITE_URL).toBe("https://docs.tws.tec.br");
+    expect(SITE_URL).toBe("https://docs.tws.tec.br/tws-panel");
     expect(REPO_URL).toBe("https://github.com/kelvindk9w/tws-panel");
+  });
+});
+
+describe("endereço do site de documentação", () => {
+  // Todo link de guia do painel: as funções *Url do módulo, menos as que apontam para o repositório.
+  const DO_REPOSITORIO = new Set(["bugReportUrl", "discussionsUrl", "featureRequestUrl"]);
+  const guias = Object.entries(links).filter(
+    (e): e is [string, (locale: string) => string] => e[0].endsWith("Url") && !DO_REPOSITORIO.has(e[0]) && typeof e[1] === "function",
+  );
+
+  it("os guias saem na pasta /tws-panel/ de docs.tws.tec.br, no idioma da interface", () => {
+    expect(docsUrl("en")).toBe("https://docs.tws.tec.br/tws-panel/en/");
+    expect(helpPageUrl("pt-BR")).toBe("https://docs.tws.tec.br/tws-panel/pt-br/guides/help/");
+    expect(guias.length).toBeGreaterThanOrEqual(15);
+    for (const [nome, fn] of guias) {
+      for (const [locale, pasta] of [["pt-BR", "pt-br"], ["en", "en"], ["es", "en"]] as const) {
+        const url = new URL(fn(locale));
+        expect(url.origin, nome).toBe(new URL(SITE_URL).origin);
+        expect(url.pathname.startsWith(`/tws-panel/${pasta}/`), `${nome}(${locale}) = ${url.href}`).toBe(true);
+      }
+    }
+  });
+
+  it("nenhum guia sai na raiz do domínio, no endereço antigo do github.io ou com barra dupla", () => {
+    for (const [nome, fn] of guias) {
+      const href = fn("en");
+      expect(href, nome).not.toMatch(/^https:\/\/docs\.tws\.tec\.br\/(en|pt-br)\//);
+      expect(href, nome).not.toContain("github.io");
+      expect(href.slice("https://".length), nome).not.toContain("//");
+      expect(href.endsWith("/") || href.includes("/#"), nome).toBe(true);
+    }
   });
 });
 
