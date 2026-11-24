@@ -9,7 +9,7 @@
  */
 import { parse } from "yaml";
 import type { GuardrailWarning } from "@paas/core";
-import { DATABASE_PORTS, bindScope, describeHostSide, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
+import { DATABASE_PORTS, bindPhrase, bindScope, describeHostSide, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
 import { isSecretKeyName } from "./secret-names.js";
 import { resolveWithVariables } from "./variable-resolve.js";
@@ -134,14 +134,20 @@ export function analyzeCompose(
     const runImage = serviceRunImage(name, service as Record<string, unknown>, buildBases);
     for (const port of publishedPorts(service.ports)) {
       const internal = internalPortService(port, runImage);
-      if (internal && bindScope(port.hostIp) !== "loopback") {
+      const scope = bindScope(port.hostIp);
+      if (internal && scope !== "loopback") {
         warnings.push({
           id: "compose.internal-port-exposed",
           severity: "critical",
           service: name,
           rule: "internal-port-exposed",
           target: publishedPortTarget(port),
-          message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} (${internal}), de uso interno. Remova a entrada de ports ou publique só em 127.0.0.1 (ex.: 127.0.0.1:${port.container}:${port.container}); o deploy será bloqueado.`,
+          // onde fica (todas as interfaces, um endereço ou variável com o padrão) e o que o deploy faz de verdade:
+          // endereço vindo de variável só avisa (rules.ts)
+          message:
+            `Serviço "${name}" publica ${describeHostSide(port, false)} para a porta ${port.container} (${internal}), de uso interno, ${bindPhrase(port.hostIp)}. ` +
+            `Remova a entrada de ports ou publique só em 127.0.0.1 (ex.: 127.0.0.1:${port.container}:${port.container})` +
+            (scope === "public" ? "; o deploy será bloqueado." : "; com o endereço vindo de variável, o deploy só avisa."),
         });
       }
     }

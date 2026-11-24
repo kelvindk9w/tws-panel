@@ -17,7 +17,7 @@ import { GithubIntegration } from "./github-integration.js";
 import { ProjectEnvStore, type EnvVar } from "./project-env.js";
 import {
   DEFAULT_GIT_CREDENTIAL_USERNAME,
-  DEPLOY_LOG_MAX_CHARS,
+  deployLogAppender,
   INGEST_MODES,
   type CreateProjectRequest,
   type DeployJob,
@@ -597,8 +597,9 @@ export class DeployService {
     for (const job of jobs) {
       const project = this.projects.find((p) => p.id === job.projectId);
       if (!project) continue;
+      const appendText = deployLogAppender({ resumed: true });
       const note = (chunk: string): void => {
-        job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+        job.log = appendText(job.log, chunk);
       };
       let result: Awaited<ReturnType<DeployEngine["recoverInterruptedDeploy"]>> = { outcome: "skipped" };
       // reserva o projeto enquanto mexe nos containers: um deploy/backup pedido agora espera (409), não corre junto
@@ -702,6 +703,24 @@ export class DeployService {
     } catch (err) {
       (this.logger ?? console).warn(`Proxy: não foi possível ${on ? "ligar" : "desligar"} o aviso "Atualizando" (${err instanceof Error ? err.message : String(err)}).`);
       if (!on) this.retryProxy();
+    }
+  }
+
+  /**
+   * Os containers do app começaram a ser parados ou recriados (o motor já ligou a fase de troca): regrava o
+   * Caddyfile agora, para a espera curta pelos cabeçalhos do app valer durante a recriação. Reload gracioso pela
+   * fila do Caddy, em paralelo ao compose. A fase acaba na etapa 4 (containers novos de pé, antes do health
+   * check), no reload que essa etapa já faz. Nunca lança: falha só avisa no log do servidor. Projeto que não
+   * está mais na lista ou nunca publicado não recarrega.
+   */
+  private async applyReplacePhase(projectId: string): Promise<void> {
+    const project = this.projects.find((p) => p.id === projectId);
+    if (!project || !this.wasPublished(project)) return;
+    try {
+      await this.engine.syncCaddy(this.projects);
+      this.clearProxyRetry();
+    } catch (err) {
+      (this.logger ?? console).warn(`Proxy: não foi possível ajustar o Caddy para a troca dos containers (${err instanceof Error ? err.message : String(err)}).`);
     }
   }
 
@@ -2326,8 +2345,9 @@ export class DeployService {
     await this.saveProjects();
     await this.saveJobs();
 
+    const appendText = deployLogAppender();
     const appendLog = (chunk: string) => {
-      job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+      job.log = appendText(job.log, chunk);
       this.trackStep(job, chunk);
     };
 
@@ -2362,6 +2382,7 @@ export class DeployService {
           guardrailOverride,
           ...(opts?.acceptedBlocks ? { acceptedBlocks: opts.acceptedBlocks } : {}),
           precomputedGuardrailReport,
+          onReplaceStart: () => this.applyReplacePhase(project.id),
         });
         // O commit que ficou no ar (base do alerta de nova atualização) é lido ANTES de o job constar como
         // concluído: quem vê "success" já encontra o commit registrado. readDeployedCommit nunca lança;
@@ -3179,8 +3200,9 @@ export class DeployService {
     };
     this.jobs.push(job);
     await this.saveJobs();
+    const appendText = deployLogAppender();
     const appendLog = (chunk: string) => {
-      job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+      job.log = appendText(job.log, chunk);
     };
     // como no deploy: o status final só entra no finally, junto com finishedAt e as etapas
     let succeeded = false;
@@ -3188,7 +3210,7 @@ export class DeployService {
       try {
         await this.setUpdatingNotice(project.id, true);
         await this.takeMailSnapshot(project);
-        await this.engine.recreate(project, appendLog);
+        await this.engine.recreate(project, appendLog, { onReplaceStart: () => this.applyReplacePhase(project.id) });
         await this.markMailApplied(project);
         succeeded = true;
         project.timezoneApplied = zone;

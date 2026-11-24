@@ -9,6 +9,7 @@ import {
   ALERT_SEVERITIES,
   ALERT_SOURCES,
   ALERT_STATUSES,
+  DEPLOY_LOG_HEAD_CHARS,
   DEPLOY_LOG_MAX_CHARS,
   DKIM_SELECTOR,
   HEALTH_LIMITS,
@@ -127,8 +128,9 @@ describe("deploy contract", () => {
     expect(PAAS_LABEL_PROJECT).toBe("paas.project");
   });
 
-  it("limite do log de deploy é generoso mas finito", () => {
+  it("limite do log de deploy é generoso mas finito; passado o limite, 1/4 fica para o começo", () => {
     expect(DEPLOY_LOG_MAX_CHARS).toBe(400_000);
+    expect(DEPLOY_LOG_HEAD_CHARS).toBe(100_000);
   });
 });
 

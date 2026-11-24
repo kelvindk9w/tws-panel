@@ -4,7 +4,8 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEPLOY_LOG_MAX_CHARS, type DeployJob } from "@paas/core";
+import { appendDeployLog, DEPLOY_LOG_MAX_CHARS, deployLogCutMarker, type DeployJob } from "@paas/core";
+import { setLocale } from "@/i18n/core";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -107,9 +108,50 @@ describe("Copiar histórico", () => {
     expect(lines).toBe(1);
   });
 
-  it("log cortado pelo limite: diz que o início foi cortado", () => {
+  it("log gravado antes do corte no meio (só o final, no limite): diz que o início foi cortado", () => {
     const { text } = buildDeployHistoryText(job({ log: "x".repeat(DEPLOY_LOG_MAX_CHARS) }));
     expect(text).toContain("o início do log foi cortado pelo limite");
+    expect(text).not.toContain("o meio do log foi cortado");
+  });
+
+  it("log cortado no meio: começo, linha traduzida com o que saiu e fim; nota no topo", () => {
+    const start = "=== Etapa 1/5 · Ingestão do código ===\nGuardrails: nenhum bloqueio\n";
+    const middle = Array.from({ length: 20_000 }, (_, i) => `#12 ${i} compilando\n`).join("");
+    const end = "ERROR: failed to solve\n✖ Deploy falhou: build\n";
+    const log = appendDeployLog("", start + middle + end);
+    const { text, lines } = buildDeployHistoryText(job({ status: "failed", log }));
+    expect(text).toContain("[o meio do log foi cortado pelo limite de 400.000 caracteres guardados");
+    expect(text).toContain("\n=== Etapa 1/5 · Ingestão do código ===\nGuardrails: nenhum bloqueio\n");
+    expect(text.endsWith("ERROR: failed to solve\n✖ Deploy falhou: build\n")).toBe(true);
+    // a marca do servidor (pt-BR, sem separador) vira a linha da tela, com separador de milhar, no mesmo lugar
+    expect(text).not.toContain("log cortado no meio:");
+    const note = /\[… ([\d.]+) caracteres \(([\d.]+) linhas\) omitidos aqui pelo limite do log …\]/.exec(text)!;
+    expect(note).not.toBeNull();
+    expect(note[1]).toMatch(/^\d{1,3}(\.\d{3})+$/);
+    expect(text.indexOf("Guardrails")).toBeLessThan(note.index);
+    expect(note.index).toBeLessThan(text.indexOf("ERROR: failed"));
+    expect(text).not.toContain("o início do log foi cortado");
+    expect(lines).toBe(text.slice(text.indexOf("=== Etapa")).replace(/\n$/, "").split("\n").length);
+  });
+
+  it("log cortado no meio: singular de uma linha e textos em inglês", () => {
+    const log = "começo\n" + deployLogCutMarker(1500, 1) + "fim\n";
+    expect(buildDeployHistoryText(job({ log })).text).toContain("[… 1.500 caracteres (1 linha) omitidos aqui pelo limite do log …]\nfim\n");
+    setLocale("en", { persist: false });
+    try {
+      const { text } = buildDeployHistoryText(job({ log: "começo\n" + deployLogCutMarker(1500, 2) + "fim\n" }));
+      expect(text).toContain("[the middle of the log was cut by the 400,000-character storage limit");
+      expect(text).toContain("começo\n\n[… 1,500 characters (2 lines) left out here by the log limit …]\nfim\n");
+    } finally {
+      setLocale("pt-BR", { persist: false });
+    }
+  });
+
+  it("nota de log antigo reduzido vence a marca do meio (o log antigo guarda só o final)", () => {
+    const log = "[… log antigo reduzido: só o final foi guardado …]\n" + deployLogCutMarker(10, 1) + "fim\n";
+    const { text } = buildDeployHistoryText(job({ log }));
+    expect(text).toContain("deploys antigos guardam só o final");
+    expect(text).not.toContain("o meio do log foi cortado");
   });
 
     it("log vazio e reinício", () => {

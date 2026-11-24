@@ -47,7 +47,10 @@ export default {
   "copyLog.head.error": "Erro: {error}",
   "copyLog.head.running": "ATENÇÃO: o deploy ainda estava em andamento quando o histórico foi copiado; o log pode estar incompleto.",
   "copyLog.head.empty": "(o log está vazio)",
-  "copyLog.cutLimit": "[o início do log foi cortado pelo limite de {limit} caracteres guardados]",
+  "copyLog.cutLimit": "[o meio do log foi cortado pelo limite de {limit} caracteres guardados: ficaram o começo e o fim, e uma linha marca o trecho que saiu]",
+  "copyLog.cutStart": "[o início do log foi cortado pelo limite de {limit} caracteres guardados]",
+  "copyLog.cutMiddle_one": "[… {chars} caracteres ({lines} linha) omitidos aqui pelo limite do log …]",
+  "copyLog.cutMiddle_other": "[… {chars} caracteres ({lines} linhas) omitidos aqui pelo limite do log …]",
   "copyLog.cutHistory": "[o início do log foi cortado: deploys antigos guardam só o final do log]",
   // MissingEnvModal
   "missingEnv.title": "Faltam {count} variável(is) obrigatória(s)",

@@ -7,6 +7,7 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { PANEL_PAGE_HEADER, describeAppOutcome, describePanelPage, parsePanelPage, type PanelPageInfo } from "./panel-page.js";
 
 export type LogFn = (chunk: string) => void;
 
@@ -16,6 +17,14 @@ export interface ProbeResult {
   status?: number;
   location?: string;
   error?: string;
+  /** A resposta foi uma página de erro do próprio painel (cabeçalho PANEL_PAGE_HEADER), não do app. */
+  panelPage?: PanelPageInfo;
+}
+
+/** A resposta em texto para o log: com a página do painel, diz o que o app fez de verdade. */
+function describeResult(result: ProbeResult): string {
+  if (result.panelPage) return describePanelPage(result.status, result.panelPage);
+  return `HTTP ${result.status}`;
 }
 
 export type Probe = (host: string, port: number, domain: string) => Promise<ProbeResult>;
@@ -100,7 +109,7 @@ export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
       onLog(`⚠ O app respondeu HTTP ${result.status} na raiz por ${domain}; ele está no ar, confira se é o esperado.\n`);
       break;
     }
-    lastError = result.error ?? `HTTP ${result.status}`;
+    lastError = result.error ?? describeResult(result);
     await sleep(2_000);
   }
   if (!ok) {
@@ -128,7 +137,14 @@ export async function waitHealthy(opts: HealthCheckOptions): Promise<void> {
   }
   const seconds = Math.round(httpsTimeoutMs / 1000);
   if (last.status !== undefined && last.status >= 500) {
-    onLog(`Última resposta do health check (HTTPS): HTTP ${last.status}\n`);
+    onLog(`Última resposta do health check (HTTPS): ${describeResult(last)}\n`);
+    // A página do painel respondeu no lugar do app: o erro diz o que o app fez, não o 503 da página.
+    if (last.panelPage) {
+      throw new Error(
+        `health check falhou após ${seconds}s: o certificado está válido, mas https://${domain} mostrou a página do painel ` +
+          `porque ${describeAppOutcome(last.panelPage)} — a aplicação não está no ar (veja os logs do container).`,
+      );
+    }
     throw new Error(
       `health check falhou após ${seconds}s: o certificado está válido, mas a aplicação respondeu HTTP ${last.status} ` +
         `por https://${domain} — ela não está no ar (veja os logs do container).`,
@@ -158,7 +174,8 @@ function probe(client: typeof http | typeof https, options: https.RequestOptions
       res.resume();
       const status = res.statusCode ?? 0;
       const location = typeof res.headers.location === "string" ? res.headers.location : undefined;
-      resolve({ ok: status >= 200 && status < 400, status, ...(location ? { location } : {}) });
+      const panelPage = parsePanelPage(res.headers[PANEL_PAGE_HEADER.toLowerCase()]);
+      resolve({ ok: status >= 200 && status < 400, status, ...(location ? { location } : {}), ...(panelPage ? { panelPage } : {}) });
     });
     req.on("timeout", () => {
       req.destroy();

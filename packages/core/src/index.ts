@@ -159,6 +159,7 @@ export * from "./api-tokens";
 export * from "./mcp";
 export * from "./security";
 export * from "./deploy";
+export * from "./deploy-log";
 export * from "./mail";
 export * from "./monitoring";
 export * from "./terminal";

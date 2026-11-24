@@ -55,7 +55,7 @@ import {
 import { applyGuardrailDismissals, composeLogging, dockerLogArgs, guardrailDismissalFor, unacceptedBlocks, validGuardrailDismissals } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
-import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
+import { CaddyManager, UPDATING_HEADER_TIMEOUT_SECONDS, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
@@ -236,12 +236,14 @@ export function caddyTargetsFor(
   projects: Project[],
   upstreamFor: (p: Project) => string,
   isUpdating: (p: Project) => boolean = () => false,
+  isReplacing: (p: Project) => boolean = () => false,
 ): CaddyTarget[] {
   return projects.flatMap((p) =>
     projectCaddyTargets(p, upstreamFor(p)).map((t) => ({
       ...t,
       published: wasPublished(p),
       ...(isUpdating(p) ? { updating: true } : {}),
+      ...(isUpdating(p) && isReplacing(p) ? { replacing: true } : {}),
       ...(p.stoppedAt ? { stopped: true } : {}),
     })),
   );
@@ -295,6 +297,15 @@ export function nodeServerPort(project: Project): number {
 /** Segunda pasta de publicação do estático: a troca sem queda alterna com `site` (ver staticSiteDir). */
 export const SITE_ALTERNATE = "paas.site-next";
 
+/**
+ * Linha do `docker compose up` (v2, saída sem terminal: ` Container <nome>  Recreate`, às vezes com ✔) sobre um
+ * container sendo recriado, parado, removido, criado ou iniciado: é aí que começa a fase de troca do deploy. As
+ * linhas do build (BuildKit, `#N ...`) e `Container <nome>  Running` (serviço sem mudança) não contam.
+ */
+export const COMPOSE_REPLACE_EVENT_RE = /(?:^|\n)[^\S\n]*(?:[✔✘⠿]\s*)?Container\s+\S+\s+(?:Recreat|Stop|Remov|Creat|Start)/;
+/** Quanto do fim da saída anterior entra na busca da linha (ela pode chegar partida entre dois pedaços). */
+const COMPOSE_EVENT_LOOKBACK = 200;
+
 export class DeployEngine {
   readonly caddy: CaddyManager;
 
@@ -334,6 +345,31 @@ export class DeployEngine {
    * seja true (override explícito do operador — auditado na camada da API).
    */
   async deploy(
+    project: Project,
+    allProjects: Project[],
+    onLog: LogFn,
+    opts?: {
+      guardrailOverride?: boolean;
+      acceptedBlocks?: string[];
+      precomputedGuardrailReport?: GuardrailReport;
+      /** Chamado uma vez, quando os containers do app começam a ser parados ou recriados (ver beginReplace). */
+      onReplaceStart?: () => Promise<void>;
+    },
+  ): Promise<void> {
+    return this.withReplaceHook(project, opts?.onReplaceStart, () => this.deployNow(project, allProjects, onLog, opts));
+  }
+
+  /** Registra o gancho da fase de troca enquanto `job` roda (deploy ou recriação de um projeto, um por vez). */
+  private async withReplaceHook<T>(project: Project, hook: (() => Promise<void>) | undefined, job: () => Promise<T>): Promise<T> {
+    if (hook) this.replaceHooks.set(project.id, hook);
+    try {
+      return await job();
+    } finally {
+      if (hook && this.replaceHooks.get(project.id) === hook) this.replaceHooks.delete(project.id);
+    }
+  }
+
+  private async deployNow(
     project: Project,
     allProjects: Project[],
     onLog: LogFn,
@@ -538,6 +574,11 @@ export class DeployEngine {
   private async proxyAndHealth(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
     onLog("\n=== Etapa 4/5 · Proxy reverso (Caddy central) ===\n");
     const domain = projectDomain(project);
+    // Os containers novos estão de pé: a espera curta pelos cabeçalhos do app acaba AQUI, no mesmo reload desta
+    // etapa (pela fila única), antes do health check. Um app cuja página inicial leva mais de 5 s nas primeiras
+    // visitas (cache frio) seria cortado pelo proxy a cada tentativa da sonda e reprovaria um deploy que antes
+    // passava. A página "Atualizando" para 502/503/504 do app continua até o fim do job.
+    this.endReplace(project, onLog);
     await this.applyProxy(project, allProjects, upstream, onLog);
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
@@ -562,12 +603,13 @@ export class DeployEngine {
     const redirects = await this.redirectOptions([...others, project], mailNames);
     const webmail = await this.webmail(onLog);
     const dynamic = await this.dynamicOptions([...others, project], onLog, { id: project.id, upstream });
-    const targets = caddyTargetsFor(others, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id));
+    const targets = caddyTargetsFor(others, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id), (p) => this.replacing.has(p.id));
     targets.push(
       ...projectCaddyTargets(project, upstream).map((t) => ({
         ...t,
         published: wasPublished(project),
         ...(this.updating.has(project.id) ? { updating: true } : {}),
+        ...(this.updating.has(project.id) && this.replacing.has(project.id) ? { replacing: true } : {}),
         ...(project.stoppedAt ? { stopped: true } : {}),
       })),
     );
@@ -584,6 +626,8 @@ export class DeployEngine {
 
   /** Liga/desliga o aviso "Atualizando" do projeto no próximo Caddyfile gerado. Devolve se mudou. */
   setUpdating(projectId: string, on: boolean): boolean {
+    // a fase de troca nunca sobrevive ao deploy: desligar o aviso também a encerra (no mesmo Caddyfile)
+    if (!on) this.replacing.delete(projectId);
     if (on === this.updating.has(projectId)) return false;
     if (on) this.updating.add(projectId);
     else this.updating.delete(projectId);
@@ -593,6 +637,60 @@ export class DeployEngine {
   /** O aviso "Atualizando" está ligado para o projeto? */
   isUpdating(projectId: string): boolean {
     return this.updating.has(projectId);
+  }
+
+  /**
+   * Fase de troca do deploy: do momento em que os containers do app começam a ser parados ou recriados até os
+   * novos estarem de pé (endReplace, no começo da etapa 4, antes do health check). Só nela o proxy limita a espera
+   * pelos cabeçalhos da resposta do app (CaddyTarget.replacing); no build (app antigo atendendo) e no health check
+   * uma requisição demorada não é cortada. Só em memória, como o aviso; desligar o aviso (setUpdating false)
+   * também a encerra (recreate, deploy que falha antes da etapa 4).
+   */
+  private readonly replacing = new Set<string>();
+
+  /** Liga a fase de troca (só com o aviso ligado). Devolve se mudou. */
+  setReplacing(projectId: string, on: boolean): boolean {
+    if (on && !this.updating.has(projectId)) return false;
+    if (on === this.replacing.has(projectId)) return false;
+    if (on) this.replacing.add(projectId);
+    else this.replacing.delete(projectId);
+    return true;
+  }
+
+  /** O projeto está na fase de troca do deploy? */
+  isReplacing(projectId: string): boolean {
+    return this.replacing.has(projectId);
+  }
+
+  /** Quem avisa o proxy de que a fase de troca começou, por projeto, durante um deploy ou recriação. */
+  private readonly replaceHooks = new Map<string, () => Promise<void>>();
+
+  /**
+   * Os containers do app vão ser parados ou recriados AGORA: liga a fase de troca e chama o gancho de quem pediu o
+   * deploy (o DeployService regrava o Caddyfile). Uma vez por job. Nunca lança: é só o ajuste do proxy, e o deploy
+   * segue mesmo que o reload falhe (o próximo ajuste, no máximo o da etapa 4, já leva a fase).
+   */
+  private async beginReplace(project: Project, onLog: LogFn): Promise<void> {
+    if (!this.setReplacing(project.id, true)) return;
+    onLog(
+      `Proxy: troca dos containers começou; até os novos estarem de pé quem visita vê a página "Atualizando" se o app levar mais de ${UPDATING_HEADER_TIMEOUT_SECONDS} s para começar a responder.\n`,
+    );
+    const hook = this.replaceHooks.get(project.id);
+    if (!hook) return;
+    try {
+      await hook();
+    } catch (err) {
+      onLog(`Aviso: não consegui ajustar o proxy para a troca dos containers (${err instanceof Error ? err.message : String(err)}); o deploy segue.\n`);
+    }
+  }
+
+  /**
+   * Fim da fase de troca (containers novos de pé, antes do health check): o próximo Caddyfile, o da etapa 4, sai
+   * sem a espera curta. Não recarrega sozinho: quem chama recarrega logo em seguida.
+   */
+  private endReplace(project: Project, onLog: LogFn): void {
+    if (!this.setReplacing(project.id, false)) return;
+    onLog("Proxy: containers novos de pé; a espera curta pelo app termina neste ajuste, antes do health check.\n");
   }
 
   /**
@@ -625,7 +723,7 @@ export class DeployEngine {
     const webmail = await this.webmail(onLog);
     const dynamic = await this.dynamicOptions(projects, onLog);
     // por último e de forma síncrona: os alvos leem o aviso "Atualizando" de agora
-    const targets = caddyTargetsFor(projects, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id));
+    const targets = caddyTargetsFor(projects, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id), (p) => this.replacing.has(p.id));
     await this.caddy.apply(targets, onLog, mailNames, { manual, ...dynamic, force: opts.force ?? false, ...redirects, ...webmail });
     await this.commitPairs();
   }
@@ -653,6 +751,7 @@ export class DeployEngine {
           websocket: project.websocket,
           published: wasPublished(project),
           ...(this.updating.has(project.id) ? { updating: true } : {}),
+          ...(this.updating.has(project.id) && this.replacing.has(project.id) ? { replacing: true } : {}),
           ...(project.stoppedAt ? { stopped: true } : {}),
           suffixes: entry.suffixes,
           hosts: entry.hosts,
@@ -854,7 +953,10 @@ export class DeployEngine {
   ): Promise<string> {
     const dir = site.dir;
     const web = plan ? plan.next : `${containerPrefix(project)}-web`;
-    if (!plan) await run("docker", ["rm", "-f", web]);
+    if (!plan) {
+      await this.beginReplace(project, onLog);
+      await run("docker", ["rm", "-f", web]);
+    }
     // Aplicação de página única: o nginx responde o index.html a qualquer caminho que não seja arquivo.
     // A configuração fica na pasta de trabalho do painel (fora do código) e entra só leitura.
     const spaArgs: string[] = [];
@@ -1004,12 +1106,20 @@ export class DeployEngine {
     // Decide por "algum serviço tem build" (inclui dockerfile_inline e contexto remoto, que ficam fora de buildTargets)
     if (composeHasBuild(model)) await this.assertBuildx(onLog);
     // o .env que o painel gravou fica fora do contexto de cada build (COPY . . não o leva para a imagem)
+    // O `up --build` constrói e só depois recria: a fase de troca começa na primeira linha do compose sobre um
+    // container sendo recriado, parado, removido ou criado (o build não). O reload do proxy roda em paralelo ao
+    // compose. Se a linha nunca aparecer (formato de saída diferente), a fase não acontece neste deploy: ela acaba
+    // na etapa 4, logo depois do up, então começá-la ali só custaria dois reloads sem efeito.
+    const replace: { started: Promise<void> | null } = { started: null };
     const code = await this.withDotenvOutOfBuild(project, src, buildTargets, onLog, () =>
       runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
+        const tail = output.slice(-COMPOSE_EVENT_LOOKBACK) + chunk;
         output += chunk;
         onLog(chunk);
+        if (!replace.started && COMPOSE_REPLACE_EVENT_RE.test(tail)) replace.started = this.beginReplace(project, onLog);
       }, { env: buildkitEnv() }),
     );
+    if (replace.started) await replace.started;
     if (code !== 0) await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
   }
@@ -1959,7 +2069,11 @@ export class DeployEngine {
    * --no-build` só recria quem mudou. Dockerfile: o mesmo container de
    * novo, da imagem já construída. Site estático: nada a fazer.
    */
-  async recreate(project: Project, onLog: LogFn): Promise<void> {
+  async recreate(project: Project, onLog: LogFn, opts?: { onReplaceStart?: () => Promise<void> }): Promise<void> {
+    return this.withReplaceHook(project, opts?.onReplaceStart, () => this.recreateNow(project, onLog));
+  }
+
+  private async recreateNow(project: Project, onLog: LogFn): Promise<void> {
     const type = project.detection?.type;
     const src = projectSrcDir(this.ctx, project);
     if (type !== "compose" && type !== "dockerfile" && type !== "node-server") {
@@ -2004,6 +2118,8 @@ export class DeployEngine {
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
       const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices, mailNetwork);
       const upArgs = await this.canonicalArgs(project, src, model, onLog);
+      // sem build: o up já começa recriando os containers
+      await this.beginReplace(project, onLog);
       let output = "";
       const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
@@ -2200,6 +2316,8 @@ export class DeployEngine {
     const mailNetwork = extra.mailNetwork ?? (await this.mailNetworkOf(project));
     // a rede de e-mail (com o Stalwart nela) antes de mexer no que está no ar: se falhar, nada foi tocado
     if (extraEnv.SMTP_HOST) await this.ensureMailNetwork(mailNetwork, project);
+    // fora da troca sem queda, o que está no ar sai agora: começa a fase de troca do proxy
+    if (!extra.swap) await this.beginReplace(project, onLog);
     if (extra.swap) {
       // nada a tirar do ar: a atual segue atendendo até a nova responder
     } else if (extra.keepPrevious) {
