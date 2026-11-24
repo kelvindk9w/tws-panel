@@ -1,6 +1,6 @@
 # Estado do trabalho — TWS Panel
 
-Atualizado em: 2026-11-15
+Atualizado em: 2026-11-24
 
 Este arquivo cobre **só o trabalho do painel** (este repositório público) e só o que é **de longa
 duração**: itens parados, pendências, ideias, decisões e uma lista curta do que entrou por último. A
@@ -22,14 +22,18 @@ Leia esta seção primeiro. Ela foi escrita no fim da terceira etapa (15/11/2026
 - Etapa encerrada. A `main`, a `sandbox` e a `dev` estão iguais, exceto o(s) commit(s) do próprio
   `estado.md` que ficam só na `dev` até o próximo lançamento (não precisam de PR sozinhos).
 - Nada em andamento: nenhuma tarefa em curso, nenhum worktree de tarefa.
-- O único PR aberto é o **#30** (documentação no domínio próprio, rascunho), esperando o DNS.
+- A `dev` já tem o **#30** (documentação em `docs.tws.tec.br/tws-panel/`, aprovado no hash `091a711c`)
+  e espera o DNS para o próximo lançamento; a `sandbox` e a `main` não o têm ainda.
 
 ### b) O que depende do Kelvin
 
-- **DNS do PR #30:** (1) o registro TXT de verificação do GitHub Pages no perfil; (2) um CNAME `docs`
-  apontando para `<usuário>.github.io`, com a nuvem cinza (só DNS) na Cloudflare. Depois do
-  lançamento que levar o #30, definir o domínio em Settings → Pages e marcar **Enforce HTTPS**. O
-  #30 já foi aprovado pelo revisor (hash `d75b782a`) e só entra na `dev` depois do DNS.
+- **Domínio da documentação (PR #30), nesta ordem:** (1) o registro TXT de verificação do GitHub
+  Pages no perfil; (2) o CNAME `docs` apontando para `<usuário>.github.io`, com a nuvem cinza (só DNS)
+  na Cloudflare, sem curinga; (3) criar o repositório `<usuário>.github.io` e configurar nele o
+  domínio `docs.tws.tec.br` em Settings → Pages, marcando **Enforce HTTPS**. O lançamento que levar o
+  #30 para a `main` só acontece depois que `https://docs.tws.tec.br/tws-panel/` responder; depois da
+  troca, conferir com `curl -sI` se o endereço antigo `<usuário>.github.io/tws-panel/en/`
+  redireciona. Não há domínio no repositório do painel.
 - **Decidir** se as adaptações do starter kit Laravel para o painel serão feitas (compose próprio,
   nginx atrás de proxy, `.env.prod.example`; é trabalho fora deste repositório).
 - **Decidir quando** fazer a melhoria do aviso de segredo no código (item 3 da próxima etapa).
@@ -63,10 +67,14 @@ Leia esta seção primeiro. Ela foi escrita no fim da terceira etapa (15/11/2026
     assistente marca "crítico" quando o deploy só avisa; (3) colchetes em endereço que vem de variável
     no modal de portas (`apps/web/src/lib/ports.ts`, `bindingText`); (4) dois-pontos duplos na
     evidência de porta aleatória. Resolve: o aviso de porta fica coerente em toda a tela.
-11. **Sugestões do revisor no #30:** alinhar o texto do redirecionamento 301 (`CHANGELOG.md`,
-    comentário do `site/astro.config.mjs`, `comoFuncionaSistema/index.json`) e escrever testes para o
-    check de CNAME/base e para o `sitePageExists`. Resolve: o texto não promete o que o GitHub Pages
-    não garante, e o check ganha cobertura.
+11. **Sugestões não bloqueantes do revisor sobre o #30 (24/11):** (i) a lista "Today those are" em
+    `site/README.md` não cita o `package.json` (citá-lo ou trocar pela referência ao `--list`);
+    (ii) `sitePageExists` em `scripts/site-config.mjs` deveria aceitar arquivos de `site/public`;
+    (iii) a detecção de "chamado direto" em `scripts/check-site-url.mjs`,
+    `scripts/check-no-real-hosts.mjs` e `scripts/check-commit-authors.mjs` deveria comparar caminhos
+    reais (link simbólico); (iv) uma frase no passo 2 do `site/README.md` explicando por que o DNS
+    antes do Settings é seguro aqui (a verificação do passo 1). Resolve: documentação e verificadores
+    mais precisos; nada disso bloqueia o lançamento.
 12. **Normalização de IP no limite de tentativas (rate-limit):** IPv6 agrupado por /64 com o
     `normalizeIP` da biblioteca (`@fastify/rate-limit` 11.2.2), nos `keyGenerator` de
     `apps/server/src/app.ts`, `routes/projects.ts`, `routes/mcp.ts` e no `services/login-limiter.ts`,
@@ -74,7 +82,17 @@ Leia esta seção primeiro. Ela foi escrita no fim da terceira etapa (15/11/2026
 13. **Saltos de versão maior (major):** xterm 6 (com teste manual do terminal web no navegador) e
     TypeScript 7, além de `react`/`react-dom` e React Router. O Dependabot ignora majors; fazer à mão,
     cada uma como tarefa própria. Resolve: dependências em dia sem PR quebrado.
-14. **Lançamento open source v0.2.0.** Depende do #30. Resolve: abre o projeto ao público.
+14. **Lançamento open source v0.2.0.** Depende do #30. Resolve: abre o projeto ao público. Falta:
+    - release `v0.2.0` com notas em inglês (o selo de release do README hoje mostra erro porque não
+      há release);
+    - teste de instalação do zero na VPS de testes, com o comando exato do README (Ubuntu 22.04 e
+      24.04);
+    - enviar a imagem de prévia social (só pela interface do GitHub);
+    - abrir as issues para iniciantes;
+    - post de boas-vindas fixado no Discussions;
+    - página do projeto no site da TWS;
+    - para a onda internacional: capturas e vídeo com a interface em inglês e as mensagens do
+      servidor traduzidas.
 15. **Ideias de backup:** botão "Fazer backup de tudo agora" e backup de projeto sem nada a copiar
     não aparecer como "Falhou".
 
@@ -93,8 +111,7 @@ primeira tarefa sai da `dev`, num worktree em `.claude/worktrees/`.
 
 ## Itens parados
 
-- **Documentação no domínio próprio** — PR #30 (rascunho, base `dev`), branch `docs/dominio-proprio`,
-  aprovado pelo revisor no hash `d75b782a`. Aguarda o DNS (veja *Para retomar*, item b).
+- Nenhum.
 
 ## Decisões do Kelvin
 
@@ -109,10 +126,23 @@ primeira tarefa sai da `dev`, num worktree em `.claude/worktrees/`.
   (*Para retomar*, item c). Regra da leva: os executores não editam o `CHANGELOG.md`; uma tarefa
   escreve as entradas do lançamento de uma vez.
 
+- 2026-11-24 — **Documentação dos projetos open source em `docs.tws.tec.br/<repositório>/`**, pelo
+  recurso de domínio herdado do GitHub Pages: o domínio `docs.tws.tec.br` fica no site de usuário
+  (`<usuário>.github.io`) e os sites de projeto sem domínio próprio aparecem como pasta. A do painel
+  fica em `https://docs.tws.tec.br/tws-panel/`; o repositório do painel não tem domínio próprio em
+  Settings → Pages. A raiz `docs.tws.tec.br` mostra a lista dos projetos.
+- 2026-11-24 — O repositório continua na conta pessoal por enquanto; reavaliar uma organização quando
+  houver dois ou mais projetos com contribuidores de fora ou outra pessoa na equipe.
+- 2026-11-24 — **Lançamento open source em duas ondas:** primeiro o público brasileiro (português),
+  depois o internacional (inglês), com a primeira release pública `v0.2.0`.
+
 ## Concluído (recente)
 
 Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `git log` da `dev` e da
 `main`.
+
+- 2026-11-24 — PR #30 integrado na `dev` (documentação em `docs.tws.tec.br/tws-panel/`; aprovado em
+  `091a711c`; merge `e76d81a6`). Ainda não está na `sandbox` nem na `main`.
 
 - 2026-11-15 — Terceiro lançamento: PR #44 (`sandbox` → `main`, merge commit `faafb195`), instalado
   na produção em 15/11/2026: página "Atualizando" no redeploy, log do deploy com começo e fim, aviso
