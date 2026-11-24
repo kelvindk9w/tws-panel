@@ -1,8 +1,9 @@
 # Documentation site
 
 The TWS Panel guides, built with [Starlight](https://starlight.astro.build) and published to
-GitHub Pages at <https://docs.tws.tec.br/> (a custom domain, served at the root). This folder is
-not part of the panel image.
+GitHub Pages at <https://docs.tws.tec.br/tws-panel/> (the `/tws-panel/` folder of the account
+domain; see [The site address](#the-site-address-changing-the-domain)). This folder is not part of
+the panel image.
 
 ```bash
 pnpm docs:dev     # local server with live reload (from the repository root)
@@ -90,31 +91,49 @@ text, which is what the old home page did. The language selector comes from Star
 
 ## The site address (changing the domain)
 
-The site is served at the root of **<https://docs.tws.tec.br/>** (`site: 'https://docs.tws.tec.br'`,
-`base: '/'`). The custom domain is set in **Settings → Pages → Custom domain** (DNS: a `CNAME`
-record `docs` pointing to `kelvindk9w.github.io`); the workflow publishes with GitHub Actions, and
-GitHub ignores a `CNAME` file in that case. `public/CNAME` still holds the same host, as a record
-of the domain, and `docs:site-url` fails if it differs from the config. GitHub Pages redirects the
-old `kelvindk9w.github.io/tws-panel/<path>` addresses (301) to the same `<path>` on the
-custom domain, so old links keep working while the custom domain stays configured (this redirect
-is not described in the GitHub docs; after the switch, confirm that `curl -sI` on the old
-`kelvindk9w.github.io/tws-panel/en/` address answers with a redirect).
+The site is served at **<https://docs.tws.tec.br/tws-panel/>** (in `astro.config.mjs`, `site` is
+`docs.tws.tec.br` over HTTPS and `base` is `'/tws-panel/'`). `docs.tws.tec.br` is the home of the
+account's open-source projects, one folder per project, named after the repository. GitHub Pages
+does this on its own: the custom domain is set on the account's **user site** (the
+`<user>.github.io` repository), and every project site of the same account that has no custom
+domain of its own is served under that domain, at `docs.tws.tec.br/<repository>/`
+([About custom domains and GitHub Pages](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/about-custom-domains-and-github-pages)).
+So **this repository has no custom domain**: nothing in **Settings → Pages → Custom domain** and no
+`public/CNAME`. A custom domain here would override the inherited one and take the site out of the
+`/tws-panel/` folder. `docs:site-url` fails if `site` or `base` differ from these values or if
+`public/CNAME` exists.
 
-Switching the domain is done in this order, so the published site is broken for minutes, not days:
+Old `kelvindk9w.github.io/tws-panel/<path>` links: GitHub Pages usually redirects them to the same
+`<path>` on the inherited domain, but the GitHub docs do not describe this redirect, so it is not
+promised here. After the switch, check that `curl -sI` on the old
+`kelvindk9w.github.io/tws-panel/en/` address answers with a redirect to
+`docs.tws.tec.br/tws-panel/en/`.
 
-1. Verify the parent domain in the **profile** settings (Pages → Add a domain, a `TXT` record
-   `_github-pages-challenge-<user>.<domain>`). Verification covers its immediate subdomains and stops
-   another GitHub user from claiming them
+Switching to the new address, done by the account owner:
+
+1. **Verify the domain on the profile.** In the account settings (the profile, not a repository):
+   **Settings → Pages → Add a domain**, enter `tws.tec.br` and create the `TXT` record GitHub shows,
+   `_github-pages-challenge-<user>` on that domain. Verification covers its immediate subdomains and
+   stops another GitHub account from claiming them
    ([Verifying your custom domain](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/verifying-your-custom-domain-for-github-pages)).
-   Avoid wildcard DNS records on that domain: they stay exposed to takeover even after verification.
-2. Create the DNS `CNAME` record pointing to `<user>.github.io` (with Cloudflare, proxy off, so
-   GitHub can issue the certificate).
-3. Merge the change into `dev`; the docs site is only published from `main`.
-4. When the release carrying the new `site`/`base` reaches `main`, set **Settings → Pages → Custom
-   domain** right away. Before that, the live build still uses the old base and would break under the
-   new domain; after it, the new build (base `/`) only works under the new domain.
-5. Turn on **Enforce HTTPS** once GitHub offers it (it can take up to 24 hours)
+2. **DNS at Cloudflare.** A `CNAME` record `docs` pointing to `<user>.github.io`, with the proxy
+   **off** (grey cloud, DNS only), so GitHub can issue the certificate. No wildcard DNS record on the
+   domain: wildcard records stay exposed to takeover even after verification.
+3. **User site.** In the `<user>.github.io` repository, with GitHub Pages turned on: **Settings →
+   Pages → Custom domain** set to `docs.tws.tec.br`, then **Enforce HTTPS** once GitHub offers it
+   (it can take up to 24 hours)
    ([Managing a custom domain](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site)).
+4. **This repository** stays without a custom domain.
+
+Because the `/tws-panel/` base does not change, both the build that is live today and the build with
+this address work at the new domain (the older build only keeps its canonical links on the
+`github.io` address until the next release). There is no window with a broken site, and the steps
+above do not need to be timed with a release. A release that carries links to the new address should
+only reach `main` once `https://docs.tws.tec.br/tws-panel/` answers, because the panel's help links
+point there.
+
+Other project sites of the same account, without a custom domain of their own, also show up at
+`docs.tws.tec.br/<repository>/`.
 
 The address is defined in **one place**: `site` and `const base` in `astro.config.mjs`. Everything
 inside the site derives from it: Starlight itself, the footer "Help and feedback" link
@@ -128,11 +147,12 @@ those are (`node scripts/check-site-url.mjs --list` prints the current list):
 - `.github/ISSUE_TEMPLATE/config.yml` and `.github/ISSUE_TEMPLATE/question.yml`;
 - `apps/web/src/lib/links.ts`, the panel module that holds the links to the site (see below).
 
-The absolute paths in the front matter of `index.md` (hero buttons, `/en/…`) and in `404.md`
-(links and the language script) also hold the `base`. `docs:links` checks that each of them points
-to an existing page.
+The absolute paths in the front matter of `index.md` (hero buttons, `/tws-panel/en/…`) and in
+`404.md` (links and the language script) also hold the `base`. `docs:links` checks that each of
+them points to an existing page.
 
-To move the site, change `site`/`base` in `astro.config.mjs`, then run:
+To move the site, change `site`/`base` in `astro.config.mjs` and the expected values at the top of
+`scripts/check-site-url.mjs` (`EXPECTED_SITE`, `EXPECTED_BASE`), then run:
 
 ```bash
 pnpm docs:site-url                 # lists every absolute address that no longer matches the config
