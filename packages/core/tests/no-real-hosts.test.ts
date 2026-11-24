@@ -21,6 +21,13 @@ describe("check-no-real-hosts: domínios", () => {
     expect(reprova(`".${zona}"`)).toBe(1);
   });
 
+  it("aceita só o site de documentação (docs.) como subdomínio, sozinho, e não como sufixo ou e-mail", () => {
+    expect(reprova(`https://docs.${zona}/ [docs](https://DOCS.${zona}/en/guides/help/)`)).toBe(0);
+    expect(reprova(`x.docs.${zona}`)).toBe(1);
+    expect(reprova(`docs-x.${zona}`)).toBe(1);
+    expect(reprova(`alguem@docs.${zona}`)).toBe(1);
+  });
+
   it("reprova e-mail da empresa que não seja o contato, e aceita o contato e o link institucional", () => {
     expect(reprova(`dono@${zona}`)).toBe(1);
     expect(reprova(`contato@${zona} https://${zona}/ [${zona}](https://${zona}/)`)).toBe(0);

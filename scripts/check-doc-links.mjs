@@ -7,7 +7,8 @@
 //   - âncora (#...)    → existe um título ou <a id> correspondente no destino;
 //   - URL do próprio repositório (github.com/<repo>/blob|tree/main/…) → o
 //     arquivo/pasta existe localmente;
-//   - `link: /tws-panel/…` do frontmatter das páginas iniciais → a página existe;
+//   - `link: /tws-panel/en/…` do frontmatter das páginas iniciais e caminhos absolutos do site
+//     (`](/tws-panel/en/…)`; o prefixo é o base da config) → a página existe;
 //   - URL absoluta do próprio site (READMEs, .github/…; o endereço vem de site/astro.config.mjs)
 //     → existe a rota (e a âncora, se houver) no build em site/dist. Sem build, essa parte é
 //     pulada com um aviso; com --require-dist, a falta do build é erro.
@@ -19,7 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { ROOT, readSiteConfig } from './site-config.mjs';
+import { ROOT, readSiteConfig, sitePageExists as pageExists } from './site-config.mjs';
 
 const SITE = readSiteConfig();
 const DIST = path.join(ROOT, 'site', 'dist');
@@ -70,6 +71,10 @@ function anchorsOf(rel) {
   return set;
 }
 
+// Caminho absoluto do site (`/tws-panel/en/guides/x/#ancora`, já com o base) → existe a página-fonte.
+// Sem esta conferência, um caminho absoluto errado passaria em silêncio (a regra fica em site-config.mjs).
+const sitePageExists = (urlPath) => pageExists(urlPath, { basePath: SITE.basePath });
+
 const problems = [];
 const report = (file, line, msg) => problems.push(`${file}:${line}: ${msg}`);
 
@@ -93,12 +98,7 @@ for (const file of files) {
     const noCode = text.replace(/`[^`]*`/g, '');
 
     const hero = new RegExp(`^\\s*link:\\s*(${SITE_BASE}\\S+)\\s*$`).exec(text);
-    if (hero) {
-      const slug = hero[1].slice(SITE_BASE.length).replace(/\/$/, '');
-      const candidates = [`site/src/content/docs/${slug}.md`, `site/src/content/docs/${slug}.mdx`, `site/src/content/docs/${slug}/index.md`];
-      if (!candidates.some((c) => existsSync(path.join(ROOT, c))))
-        report(file, line, `link do frontmatter sem página (${hero[1]})`);
-    }
+    if (hero && !sitePageExists(hero[1])) report(file, line, `link do frontmatter sem página (${hero[1]})`);
 
     for (const m of noCode.matchAll(/!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
       const url = m[1];
@@ -112,6 +112,7 @@ for (const file of files) {
       if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//')) continue;
       if (url.startsWith('/')) {
         if (!url.startsWith(SITE_BASE)) report(file, line, `caminho absoluto não resolvível (${url})`);
+        else if (!sitePageExists(url)) report(file, line, `caminho absoluto sem página no site (${url})`);
         continue;
       }
       const hashAt = url.indexOf('#');

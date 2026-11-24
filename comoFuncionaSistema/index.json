@@ -68,6 +68,10 @@
     {
       "caminho": "docs",
       "papel": "Documentação em prosa e evidências de fases"
+    },
+    {
+      "caminho": "site",
+      "papel": "Site de documentação (Astro Starlight, en e pt-br), publicado pelo workflow docs.yml no GitHub Pages em https://docs.tws.tec.br/tws-panel/ (site https://docs.tws.tec.br + base /tws-panel/ em site/astro.config.mjs, a única fonte do endereço). O domínio docs.tws.tec.br fica configurado no site de USUÁRIO da conta (<usuário>.github.io), que serve de casa para todos os projetos open source, um por pasta com o nome do repositório: o GitHub Pages dá esse domínio, como caminho /<repositório>/, a todo site de projeto sem domínio próprio. Por isso este repositório NÃO tem domínio próprio (nada em Settings → Pages, sem site/public/CNAME). Os links antigos kelvindk9w.github.io/tws-panel/…: o GitHub Pages costuma redirecioná-los para o mesmo caminho no domínio herdado (não está na documentação do GitHub; conferir depois da troca). scripts/check-site-url.mjs exige site = https://docs.tws.tec.br, base = /tws-panel/ e ausência de site/public/CNAME, e confere READMEs, templates e apps/web/src/lib/links.ts contra a config; scripts/check-doc-links.mjs confere os caminhos absolutos /tws-panel/… do frontmatter e do Markdown (sitePageExists, em scripts/site-config.mjs) e, com o build, as rotas em site/dist"
     }
   ],
   "modulos": [

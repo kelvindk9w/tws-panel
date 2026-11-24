@@ -10,8 +10,11 @@
  * em vez de tentar "limpar".
  */
 
-/** Site de documentação (GitHub Pages). */
-export const SITE_URL = "https://kelvindk9w.github.io/tws-panel";
+/**
+ * Site de documentação (GitHub Pages): a pasta /tws-panel do domínio docs.tws.tec.br, que o site de
+ * projeto herda do site de usuário da conta. Sem barra final (os modelos abaixo acrescentam "/").
+ */
+export const SITE_URL = "https://docs.tws.tec.br/tws-panel";
 /** Repositório no GitHub. */
 export const REPO_URL = "https://github.com/kelvindk9w/tws-panel";
 

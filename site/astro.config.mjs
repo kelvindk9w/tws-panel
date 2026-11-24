@@ -5,8 +5,14 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 import remarkDocLinks from './plugins/remark-doc-links.mjs';
 import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 
-// GitHub Pages project site: https://kelvindk9w.github.io/tws-panel/
-const base = '/tws-panel';
+// GitHub Pages project site, in its own folder of the account domain: https://docs.tws.tec.br/tws-panel/
+// This repository has NO custom domain (none in Settings → Pages, no site/public/CNAME): the domain is
+// set on the account's user site (<user>.github.io), and every project site without a custom domain
+// inherits it as https://docs.tws.tec.br/<repository>/. `pnpm docs:site-url` checks this site + base
+// and that site/public/CNAME does not exist (a custom domain here would override the inherited one).
+// Old https://kelvindk9w.github.io/tws-panel/… links: GitHub Pages usually redirects them to the same
+// path on the inherited domain; that is checked after the switch, not guaranteed here.
+const base = '/tws-panel/';
 const repo = 'https://github.com/kelvindk9w/tws-panel';
 
 // The first group is the step-by-step guide, in two chained parts (Part 1 Install, Part 2 Configure).
@@ -16,7 +22,7 @@ const repo = 'https://github.com/kelvindk9w/tws-panel';
 // fallback), so adding a new language is a matter of adding a folder under
 // src/content/docs/ and one entry in `locales` below.
 export default defineConfig({
-  site: 'https://kelvindk9w.github.io',
+  site: 'https://docs.tws.tec.br',
   base,
   trailingSlash: 'always',
   markdown: {
